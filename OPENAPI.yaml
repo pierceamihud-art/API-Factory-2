@@ -1,0 +1,42 @@
+openapi: 3.1.0
+info:
+  title: API-Factory
+  version: 0.1.0
+servers:
+  - url: http://localhost:8787
+paths:
+  /_api/healthz:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          $ref: "#/components/responses/ApiSuccess"
+  /api/v1/hello/ping:
+    get:
+      summary: Ping
+      responses:
+        "200":
+          $ref: "#/components/responses/ApiSuccess"
+  /api/v1/hello/echo:
+    post:
+      summary: Echo
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          $ref: "#/components/responses/ApiSuccess"
+components:
+  responses:
+    ApiSuccess:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success: { type: boolean }
+              data: {}
+              error: {}
+              meta: { type: object }
