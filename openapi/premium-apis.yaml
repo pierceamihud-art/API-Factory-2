@@ -1,0 +1,275 @@
+openapi: "3.0.3"
+info:
+  title: API-Factory Premium — Compliance Mapping (with example paths)
+  version: 1.1.0
+  description: |
+    OpenAPI companion that maps Premium APIs to U.S. compliance areas and recommended controls.
+    This file includes example `paths` and `x-compliance` vendor extensions to show how to attach legal metadata to operations.
+
+servers:
+  - url: https://api.example.com
+
+paths:
+  /safenow/consent:
+    post:
+      summary: Create consent record
+      description: Create or update a consent artifact. x-compliance lists applicable laws and recommended controls.
+      tags: [SafeNow]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsentCreate'
+      responses:
+        '201':
+          description: Consent created
+      x-compliance:
+        laws: ["FTC Privacy", "State Breach Notification Laws"]
+        recommended_controls: ["Encrypt at rest", "Access logging", "Breach notification webhook"]
+
+  /safenow/consent/{consent_id}:
+    parameters:
+      - name: consent_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Retrieve consent record
+      tags: [SafeNow]
+      responses:
+        '200':
+          description: Consent record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Consent'
+      x-compliance:
+        laws: ["FTC Privacy", "State Breach Notification Laws"]
+        recommended_controls: ["Access auditing", "Retention & deletion policies"]
+
+  /safepay/escrow:
+    post:
+      summary: Create an escrow hold
+      tags: [SafePay]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EscrowCreate'
+      responses:
+        '201':
+          description: Escrow created
+      x-compliance:
+        laws: ["CFPB Reg E", "BSA"]
+        recommended_controls: ["KYC", "AML monitoring", "Settlement audit logs"]
+
+  /safepay/escrow/{escrow_id}/disburse:
+    post:
+      summary: Disburse escrow funds
+      tags: [SafePay]
+      parameters:
+        - name: escrow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Disbursement scheduled
+      x-compliance:
+        laws: ["CFPB Reg E", "BSA"]
+        recommended_controls: ["Audit trail", "Fraud detection"]
+
+  /medibridge/appointments:
+    post:
+      summary: Create telehealth appointment
+      tags: [MediBridge]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentCreate'
+      responses:
+        '201':
+          description: Appointment created
+      x-compliance:
+        laws: ["HIPAA", "HITECH"]
+        recommended_controls: ["PHI encryption", "BAA required", "Access control"]
+
+  /eduai/session:
+    post:
+      summary: Submit tutoring session / progress
+      tags: [EduAI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TutoringSession'
+      responses:
+        '200':
+          description: Session recorded
+      x-compliance:
+        laws: ["FERPA", "COPPA", "ADA"]
+        recommended_controls: ["Age verification", "Parental consent flows", "Accessibility metadata"]
+
+  /futurewealth/insights:
+    get:
+      summary: Retrieve trading insights
+      tags: [FutureWealthBot]
+      parameters:
+        - name: account_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Insights payload
+      x-compliance:
+        laws: ["SEC", "CFTC", "FinCEN"]
+        recommended_controls: ["Risk disclosures", "KYC integration optional", "Transaction monitoring"]
+
+  /idchain/verify:
+    post:
+      summary: Verify identity attestation
+      tags: [IDChain]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityVerifyRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityVerifyResponse'
+      x-compliance:
+        laws: ["REAL ID Act", "NIST"]
+        recommended_controls: ["Privacy-preserving biometric handling", "Explicit consent"]
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    ConsentCreate:
+      type: object
+      properties:
+        user_id:
+          type: string
+        scope:
+          type: string
+        accepted_at:
+          type: string
+          format: date-time
+      required: [user_id, scope, accepted_at]
+
+    Consent:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        scope:
+          type: string
+        accepted_at:
+          type: string
+          format: date-time
+
+    EscrowCreate:
+      type: object
+      properties:
+        amount:
+          type: number
+          format: float
+        currency:
+          type: string
+        payee_id:
+          type: string
+      required: [amount, currency, payee_id]
+
+    AppointmentCreate:
+      type: object
+      properties:
+        patient_id:
+          type: string
+        provider_id:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+      required: [patient_id, provider_id, start_time]
+
+    TutoringSession:
+      type: object
+      properties:
+        student_id:
+          type: string
+        topic:
+          type: string
+        outcome:
+          type: string
+
+    IdentityVerifyRequest:
+      type: object
+      properties:
+        subject_id:
+          type: string
+        biometric_hash:
+          type: string
+      required: [subject_id, biometric_hash]
+
+    IdentityVerifyResponse:
+      type: object
+      properties:
+        verified:
+          type: boolean
+        confidence:
+          type: number
+
+x-premium-apis:
+  - name: SafeNow
+    tier: Gold
+    description: Digital consent vault and consent artifacts store.
+    compliance: ["FTC Privacy", "State Breach Notification Laws"]
+    recommended_controls: ["Encrypt at rest", "Access logging", "Breach notification webhook"]
+
+  - name: SafePay
+    tier: Platinum
+    compliance: ["CFPB Reg E", "BSA"]
+    recommended_controls: ["KYC", "AML monitoring", "Settlement audit logs"]
+
+  - name: MediBridge
+    tier: Platinum
+    compliance: ["HIPAA", "HITECH", "FDA"]
+    recommended_controls: ["PHI controls", "BAA"]
+
+  - name: EduAI
+    tier: Platinum
+    compliance: ["FERPA", "COPPA", "ADA"]
+    recommended_controls: ["Age verification", "Accessibility metadata"]
+
+  - name: FutureWealthBot
+    tier: Platinum
+    compliance: ["SEC", "CFTC", "FinCEN"]
+    recommended_controls: ["Risk disclosures", "Transaction monitoring"]
+
+  - name: IDChain
+    tier: Enterprise
+    compliance: ["REAL ID Act", "NIST"]
+    recommended_controls: ["Privacy-preserving biometrics", "Explicit consent"]
+

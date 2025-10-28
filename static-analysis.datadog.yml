@@ -1,0 +1,196 @@
+
+import os
+import json
+import time
+import hashlib
+from typing import Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from app.auth import get_api_key
+
+router = APIRouter()
+# Abstraction for storage with Redis-backed async implementation and in-memory fallback.
+
+REDIS_URL = os.getenv("REDIS_URL", "") or os.getenv("REDIS_URI", "")
+
+class VaultStoreRequest(BaseModel):
+    owner_id: str
+    doc_name: str
+    content: str
+    encrypted: Optional[bool] = True
+
+def _make_id(seed: str) -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+class RedisVault:
+    def __init__(self, url: str):
+        import redis.asyncio as redis  # delayed import
+        self._client = redis.from_url(url, decode_responses=True)
+
+    async def store(self, owner_id: str, doc_name: str, content: str, encrypted: bool) -> Dict[str, str]:
+        doc_id = _make_id(f"doc:{time.time()}:{owner_id}:{doc_name}")
+        h = _make_id(f"vault:{owner_id}:{doc_name}:{content}")
+        payload = {
+            "owner_id": owner_id,
+            "doc_name": doc_name,
+            "content": content,
+            "encrypted": json.dumps(bool(encrypted)),
+            "hash": h,
+            "created_at": str(time.time()),
+        }
+        await self._client.hset(f"vault:doc:{doc_id}", mapping=payload)
+        # For quick lookup, also store an index (owner -> list)
+        await self._client.sadd(f"vault:owner:{owner_id}", doc_id)
+        return {"doc_id": doc_id, "hash": h}
+
+    async def get(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        data = await self._client.hgetall(f"vault:doc:{doc_id}")
+        if not data:
+            return None
+        data["encrypted"] = json.loads(data.get("encrypted", "false"))
+        return data
+
+class MemoryVault:
+    def __init__(self):
+        self._store: Dict[str, Dict] = {}
+        self._lock = asyncio.Lock()
+
+    async def store(self, owner_id: str, doc_name: str, content: str, encrypted: bool):
+        async with self._lock:
+            doc_id = _make_id(f"doc:{time.time()}:{owner_id}:{doc_name}")
+            h = _make_id(f"vault:{owner_id}:{doc_name}:{content}")
+            self._store[doc_id] = {
+                "owner_id": owner_id,
+                "doc_name": doc_name,
+                "content": content,
+                "encrypted": bool(encrypted),
+                "hash": h,
+                "created_at": time.time(),
+            }
+            return {"doc_id": doc_id, "hash": h}
+
+    async def get(self, doc_id: str):
+        async with self._lock:
+            return self._store.get(doc_id)
+
+# Instantiate vault backend (Redis if configured; otherwise in-memory)
+if REDIS_URL:
+    try:
+        _vault_backend = RedisVault(REDIS_URL)
+    except Exception:
+        _vault_backend = MemoryVault()
+else:
+    _vault_backend = MemoryVault()
+
+@router.post("/vault/store")
+async def vault_store(req: VaultStoreRequest, api_key: str = Depends(get_api_key)):
+    """Store a document in the vault (Redis-backed when configured)."""
+    result = await _vault_backend.store(req.owner_id, req.doc_name, req.content, bool(req.encrypted))
+    return result
+
+@router.post("/record/store")
+async def record_store(req: RecordStoreRequest, api_key: str = Depends(get_api_key)):
+    payload_str = repr(req.payload) if req.payload is not None else ""
+    h = _make_id(f"record:{req.event}:{payload_str}:{time.time()}")
+    rec_id = _make_id(f"rec:{time.time()}:{req.event}")
+    _RECORDS[rec_id] = {
+        "event": req.event,
+        "payload": req.payload,
+        "hash": h,
+        "timestamp": time.time(),
+    }
+    return {"record_id": rec_id, "hash": h}
+
+@router.get("/record/verify/{record_id}")
+async def record_verify(record_id: str, api_key: str = Depends(get_api_key)):
+    rec = _RECORDS.get(record_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Record not found")
+    return {"record_id": record_id, "hash": rec["hash"], "timestamp": rec["timestamp"]}
+
+@router.post("/identity/verify")
+async def identity_verify(req: IdentityVerifyRequest, api_key: str = Depends(get_api_key)):
+    identity = req.identity
+    disclose = req.disclose or list(identity.keys())
+    disclosed = {k: identity.get(k) for k in disclose}
+    proof_raw = repr(sorted(disclosed.items()))
+    proof = _make_id(f"proof:{proof_raw}")
+    iid = _make_id(f"identity:{time.time()}:{proof}")
+    _IDENTITIES[iid] = {"full": identity, "disclosed": disclosed, "proof": proof, "created_at": time.time()}
+    return {"identity_id": iid, "proof": proof, "disclosed": disclosed}
+
+@router.post("/identity/export")
+async def identity_export(req: IdentityExportRequest, api_key: str = Depends(get_api_key)):
+    rec = _IDENTITIES.get(req.identity_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Identity not found")
+    package = {"disclosed": rec["disclosed"], "proof": rec["proof"], "exported_at": time.time()}
+    return {"package": package, "format": req.format}
+
+@router.post("/wallet/migrate")
+async def wallet_migrate(req: WalletMigrateRequest, api_key: str = Depends(get_api_key)):
+    new_id = _make_id(f"wallet_migrate:{req.wallet_id}:{req.target_app}:{time.time()}")
+    _WALLETS[new_id] = {"origin": req.wallet_id, "target_app": req.target_app, "created_at": time.time()}
+    return {"status": "migrated", "new_wallet_id": new_id}
+
+import pytest
+from httpx import AsyncClient
+
+from app.main import app
+
+@pytest.mark.asyncio
+async def test_safenow_endpoints_happy_path():
+    headers = {"X-API-Key": "devkey"}
+
+    async with AsyncClient(app=app, base_url="http://test", headers=headers) as ac:
+        # Consent request
+        r = await ac.post("/v1/consent/request", json={"requester": "appA", "purpose": "read_profile"})
+        assert r.status_code == 200
+        consent = r.json()
+        assert "consent_id" in consent
+
+        # Vault store
+        r = await ac.post("/v1/vault/store", json={
+            "owner_id": "user1",
+            "doc_name": "id_card",
+            "content": "encrypted-content",
+            "encrypted": True
+        })
+        assert r.status_code == 200
+        vault = r.json()
+        assert "doc_id" in vault and "hash" in vault
+
+        doc_id = vault["doc_id"]
+
+        # Record store + verify
+        r = await ac.post("/v1/record/store", json={"event": "signed_contract", "payload": {"value": 123}})
+        assert r.status_code == 200
+        rec = r.json()
+        assert "record_id" in rec and "hash" in rec
+
+        r = await ac.get(f\"/v1/record/verify/{rec['record_id']}\")
+        assert r.status_code == 200
+        v = r.json()
+        assert v["record_id"] == rec["record_id"]
+        assert "hash" in v
+
+        # Identity verify + export
+        identity = {"name": "Alice", "email": "alice@example.com", "dob": "1990-01-01"}
+        r = await ac.post("/v1/identity/verify", json={"identity": identity, "disclose": ["name"]})
+        assert r.status_code == 200
+        id_res = r.json()
+        assert "identity_id" in id_res and "proof" in id_res
+
+        r = await ac.post("/v1/identity/export", json={"identity_id": id_res["identity_id"]})
+        assert r.status_code == 200
+        exp = r.json()
+        assert "package" in exp and "proof" in exp["package"]
+
+        # Wallet migrate
+        r = await ac.post("/v1/wallet/migrate", json={"wallet_id": "w1", "target_app": "appB"})
+        assert r.status_code == 200
+        w = r.json()
+        assert w.get("status") == "migrated"
+        assert "new_wallet_id" in w

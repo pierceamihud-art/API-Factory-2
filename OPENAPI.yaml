@@ -1,0 +1,266 @@
+openapi: 3.0.0
+info:
+  title: API-Factory MVP
+  version: '1.0'
+  description: |
+    API-Factory MVP with safety guardrails and LLM integration.
+    
+    Features:
+    - API key authentication
+    - Per-key rate limiting
+    - Input validation and safety checks
+    - Configurable model selection
+    - Timeout protection
+    
+    Set up:
+    1. Copy SafeNow.env.example to SafeNow.env
+    2. Configure API keys and limits
+    3. Run with `make run` or `docker-compose up`
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    PredictRequest:
+      type: object
+      required:
+        - input
+      properties:
+        input:
+          type: string
+          description: Text input to process
+          minLength: 1
+        context:
+          type: object
+          description: Optional context dictionary for the model
+    PredictResponse:
+      type: object
+      required:
+        - output
+      properties:
+        output:
+          type: string
+          description: Generated text response
+        debug:
+          type: object
+          description: Debug information about the request
+
+paths:
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      description: Returns Prometheus metrics for monitoring
+      responses:
+        '200':
+          description: Metrics in Prometheus format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /admin/stats:
+    get:
+      summary: Usage statistics
+      description: Get API usage statistics (requires admin API key)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Usage statistics
+        '403':
+          description: Admin access required
+          
+  /admin/health/deep:
+    get:
+      summary: Deep health check
+      description: Verify all subsystems are working correctly
+      responses:
+        '200':
+          description: Health check results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded]
+                  checks:
+                    type: object
+
+  /v1/batch:
+    post:
+      summary: Create batch processing job
+      description: Start an asynchronous batch processing job
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - inputs
+              properties:
+                inputs:
+                  type: array
+                  items:
+                    type: string
+                  minItems: 1
+                  maxItems: 10
+                context:
+                  type: object
+                callback_url:
+                  type: string
+                  format: uri
+      responses:
+        '200':
+          description: Batch job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch_id:
+                    type: string
+                  status:
+                    type: string
+                    
+  /v1/batch/{batch_id}:
+    get:
+      summary: Get batch job status
+      description: Check status and get results of a batch job
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: batch_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batch job status and results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch_id:
+                    type: string
+                  status:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      type: object
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        '404':
+          description: Batch job not found
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns 200 OK when service is healthy
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  /predict:
+    post:
+      summary: Generate text with LLM
+      description: |
+        Processes text input through configured LLM with safety guards:
+        - Rate limiting per API key
+        - Input length and content filtering
+        - Configurable model selection
+        - Timeout protection
+      parameters:
+        - in: header
+          name: X-Model
+          schema:
+            type: string
+          required: false
+          description: Optional model override
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PredictRequest'
+      responses:
+        '200':
+          description: Successful prediction
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictResponse'
+        '400':
+          description: Bad request (invalid input/model)
+        '401':
+          description: Missing or invalid API key
+        '413':
+          description: Input too large
+        '429':
+          description: Rate limit exceeded
+        '504':
+          description: Model processing timeout
+
+  /v1/intention:
+    post:
+      summary: Daily intention generator
+      description: Generates personalized daily intentions based on profile and context
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - profile
+                - context
+              properties:
+                profile:
+                  type: object
+                  properties:
+                    values:
+                      type: array
+                      items:
+                        type: string
+                    tradition:
+                      type: string
+                context:
+                  type: object
+                  properties:
+                    mood:
+                      type: string
+                    time:
+                      type: string
+                    moon_phase:
+                      type: string
+      responses:
+        '200':
+          description: Generated intention response
+        '401':
+          description: Missing or invalid API key
+        '429':
+          description: Rate limit exceeded

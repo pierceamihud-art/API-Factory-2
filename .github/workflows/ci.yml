@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_IMAGE: ${{ vars.BUILD_IMAGE || 'false' }}
+      PUSH_IMAGE: ${{ vars.PUSH_IMAGE || 'false' }}
+      IMAGE_NAME: ghcr.io/${{ github.repository }}/api-factory
+      IMAGE_TAG: ${{ github.sha }}
+    strategy:
+      matrix:
+        store: [memory, redis]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+      - name: Set matrix env
+        run: |
+          echo "RATE_LIMIT_STORE=${{ matrix.store }}" >> $GITHUB_ENV
+          # always provide a default REDIS_URL for redis job; not used for memory
+          echo "REDIS_URL=redis://127.0.0.1:6379/0" >> $GITHUB_ENV
+      - name: Wait for Redis (only for redis matrix)
+        if: matrix.store == 'redis'
+        uses: jakejarvis/wait-action@v0.3.0
+        with:
+          time: '30' # seconds
+          url: 'http://127.0.0.1:6379' # we'll still check via redis-ping next
+      - name: Start Redis service (only used by redis matrix)
+        if: matrix.store == 'redis'
+        services:
+          redis:
+            image: redis:7-alpine
+            ports:
+              - 6379:6379
+        run: |
+          echo "Redis service will be available as localhost:6379"
+      - name: Lint (ruff)
+        run: |
+          . .venv/bin/activate
+          ruff check .
+      - name: Run tests
+        run: |
+          . .venv/bin/activate
+          pytest -q
+      - name: Build Docker image (optional)
+        if: env.BUILD_IMAGE == 'true'
+        run: |
+          docker build -t $IMAGE_NAME:$IMAGE_TAG .
+      - name: Login to GHCR (optional push)
+        if: env.BUILD_IMAGE == 'true' && env.PUSH_IMAGE == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push Docker image (optional)
+        if: env.BUILD_IMAGE == 'true' && env.PUSH_IMAGE == 'true'
+        run: |
+          docker push $IMAGE_NAME:$IMAGE_TAG
